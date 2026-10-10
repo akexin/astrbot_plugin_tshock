@@ -12,13 +12,17 @@ astrbot_plugin_tshock
 依赖：httpx（异步 HTTP），见 requirements.txt
 参考：https://tshock.readme.io/reference/rest-api-endpoints
 
-v1.1.2 变更
+v1.1.3 变更
 -----------
 兼容性修复（P0）：
-  - ``self.logger`` 属性由较新版本 AstrBot 的 ``Star`` 基类在 ``__init__`` 中注入，
-    在 AstrBot v4.17 等版本上并不存在，直接使用会抛 ``AttributeError`` 导致插件
-    加载失败。现于 ``__init__`` 中做 ``hasattr`` 探测，缺失时回退到模块级
-    ``astrbot.api.logger``（新版本仍会保留插件专属 logger）。
+  - 彻底移除对 ``self.logger`` 的依赖，全部改用模块级 ``astrbot.api.logger``。
+    实测 AstrBot v4.26.7 的 ``Star`` 基类 ``__init__`` 仅设置 ``self.context``，
+    并未注入 ``self.logger``（该属性是更晚版本才加入的），因此任何直接使用
+    ``self.logger`` 的写法都会抛 ``AttributeError`` 导致插件加载失败。
+    模块级 ``logger`` 在所有版本均可用，是 AstrBot 官方插件模板的通用写法。
+
+v1.1.2 变更
+-----------
   - 主动消息改为 ``MessageChain(chain=[Plain(text)])`` 构造式，该写法在
     AstrBot v4.17 上已验证可用（``MessageChain().message()`` 为较新 API）。
 
@@ -29,7 +33,7 @@ v1.1.1 变更
     ``async def initialize(self)``。
   - 指令组 ``ts`` 改为文档推荐的无 ``self`` 形式。
   - 主动消息改用 ``MessageChain().message()`` 构建（官方推荐写法）。
-  - 日志改用插件自带的 ``self.logger``，可在 WebUI 单独调节等级。
+  - 日志改用插件自带 logger（v1.1.3 起回归模块级 ``logger`` 以兼容全部版本）。
   - 补全 metadata.yaml 的 ``short_desc`` / ``support_platforms`` / ``astrbot_version``。
   - 依官方指南说明：``@register`` 装饰器已废弃，本插件通过 ``metadata.yaml`` 注册元数据。
 
@@ -64,7 +68,7 @@ from astrbot.api.event import AstrMessageEvent, MessageChain, filter
 from astrbot.api.message_components import Plain
 from astrbot.api.star import Context, Star
 
-__version__ = "1.1.2"
+__version__ = "1.1.3"
 
 # TShock 默认每分钟 5 次 REST 请求，低于 12 秒的轮询必然触发限流并误判离线。
 MIN_POLL_INTERVAL = 12
@@ -185,12 +189,10 @@ class TShockClient:
 class TShockPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
-        # 兼容性：``self.logger``（插件专属日志器）由较新版本 AstrBot 的 Star 基类
-        # 在 __init__ 中注入；部分版本（如 v4.17）的基类没有该属性，若直接使用
-        # 会抛 AttributeError 并导致插件加载失败。这里做一次探测回退。
-        if not hasattr(self, "logger"):
-            self.logger = logger
-
+        # 注意：``self.logger``（插件专属日志器）仅在较新版本 AstrBot 的 Star 基类中
+        # 由 ``__init__`` 注入；实测 AstrBot v4.26.7 的基类只设置 ``self.context``，
+        # 并无该属性。为兼容所有版本，本插件统一使用模块级 ``astrbot.api.logger``，
+        # 不再依赖 ``self.logger``（这是 AstrBot 官方插件模板的通用写法）。
         self.config = config
         self.host = str(config.get("host", "http://127.0.0.1:7878")).strip()
         self.token = str(config.get("token", "")).strip()
@@ -209,7 +211,7 @@ class TShockPlugin(Star):
 
         参考：docs/dev/star/guides/simple —— "可选择实现异步的插件初始化方法"。
         """
-        self.logger.info(
+        logger.info(
             "[tshock] 插件已加载 v%s，REST 地址: %s，桥接: %s",
             __version__,
             self.host,
@@ -447,7 +449,7 @@ class TShockPlugin(Star):
 
         # 安全：默认仅转发管理员的消息，避免任意群成员向游戏内广播。
         if bridge.get("forward_require_admin", True) and not self._is_admin(event):
-            self.logger.debug(
+            logger.debug(
                 "[tshock] 非管理员消息，跳过转发：%s", event.get_sender_name()
             )
             return
@@ -457,7 +459,7 @@ class TShockPlugin(Star):
         try:
             await self.client.broadcast(f"[{sender}] {text}")
         except TShockAPIError as exc:
-            self.logger.warning("[tshock] 转发消息到服务器失败: %s", exc)
+            logger.warning("[tshock] 转发消息到服务器失败: %s", exc)
 
     # ==================== 桥接轮询（服务器 -> 机器人 推送） ====================
 
@@ -477,7 +479,7 @@ class TShockPlugin(Star):
             except asyncio.CancelledError:
                 break
             except Exception as exc:  # noqa: BLE001
-                self.logger.error("[tshock] 桥接轮询异常: %s", exc)
+                logger.error("[tshock] 桥接轮询异常: %s", exc)
 
             await asyncio.sleep(interval)
 
@@ -529,7 +531,7 @@ class TShockPlugin(Star):
             chain = MessageChain(chain=[Plain(text)])
             await self.context.send_message(target, chain)
         except Exception as exc:  # noqa: BLE001
-            self.logger.error("[tshock] 推送桥接消息失败: %s", exc)
+            logger.error("[tshock] 推送桥接消息失败: %s", exc)
 
     # ==================== 工具方法 ====================
 

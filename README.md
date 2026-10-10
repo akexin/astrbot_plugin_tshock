@@ -63,6 +63,13 @@ AstrBot/
 
 然后在 AstrBot WebUI 的「插件」页找到「TShock 服务器管理」，点击卡片上的刷新图标（重载插件）即可。
 
+### 安装 / 更新排障
+
+- **从 GitHub 仓库地址安装**时，AstrBot 会访问 `raw.githubusercontent.com` 校验 `metadata.yaml`。若该域名被网络阻断，安装会在校验阶段失败——可在安装对话框的「加速 / 代理」框中填入一个 GitHub 代理前缀（例如 `https://gh-proxy.com`），AstrBot 会以 `代理前缀/https://raw.githubusercontent.com/...` 的形式请求。
+- **最稳妥的方式是直接上传 zip**：把本仓库打包成 zip（根目录即插件文件，不要再套一层目录），在 WebUI「插件 → 安装插件 → 上传文件」中选择该 zip，由 AstrBot 解压安装。
+- 若插件页提示「插件已存在」，请先**卸载**旧版再重新安装，否则可能仍加载缓存中的旧代码。
+- 确认已生效：加载后日志应出现 `[tshock] 插件已加载 v1.1.3 ...`。
+
 ## 快速开始
 
 ### 第 1 步：开启 TShock REST API
@@ -157,12 +164,18 @@ curl "http://<主机>:<REST端口>/v2/token/create?username=<管理员名>&passw
 
 ## 变更日志
 
+### v1.1.3
+
+**兼容性修复（P0，彻底修复插件加载失败）**
+
+- 彻底移除对 `self.logger` 的依赖，全部改用模块级 `astrbot.api.logger`。实测 **AstrBot v4.26.7** 的 `Star` 基类 `__init__` 只设置 `self.context`，并不注入 `self.logger`（该属性是更晚版本才加入的），因此任何使用 `self.logger` 的写法都会抛 `AttributeError: 'TShockPlugin' object has no attribute 'logger'` 并使插件加载失败。模块级 `logger` 在所有版本均可用。
+
 ### v1.1.2
 
 **兼容性修复（P0，修复插件无法加载）**
 
-- `self.logger` 属性由较新版本 AstrBot 的 `Star` 基类在 `__init__` 中注入，**在 AstrBot v4.17 等版本上并不存在**，直接使用会抛 `AttributeError: 'TShockPlugin' object has no attribute 'logger'` 导致插件加载失败。现于 `__init__` 中做 `hasattr` 探测，缺失时回退到模块级 `astrbot.api.logger`；较新版本仍保留插件专属 logger。
 - 主动消息由 `MessageChain().message()` 改为 `MessageChain(chain=[Plain(text)])` 构造式——后者在 AstrBot v4.17 上已验证可用，前者为较新 API。
+- （v1.1.2 采用的 `hasattr` 回退方案，已在 v1.1.3 被更彻底的模块级 `logger` 方案取代。）
 
 ### v1.1.1
 

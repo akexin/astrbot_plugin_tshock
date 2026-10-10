@@ -11,7 +11,7 @@ desc: >-
   执行远程命令（广播 / 私聊 / 原始指令），以及聊天室与游戏服务器之间的消息桥接。
   兼容 TShock 6.x（已在 TShock 6.2.1.0 / Terraria 1.4.5.8 实测）。
 # 版本号，官方推荐带 v 前缀
-version: v1.1.2
+version: v1.1.3
 author: akexin
 repo: https://github.com/akexin/astrbot_plugin_tshock
 license: MIT
