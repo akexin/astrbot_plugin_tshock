@@ -1,6 +1,8 @@
 {
   "host": "http://127.0.0.1:7878",
-  "token": "「在此填入 REST Token，可用 tools/setup_rest_token.py 生成」",
+  "token": "「二选一」服务端 ApplicationRestTokens 预置的 Token（JSON 键名），或留空改用下方账号密码",
+  "username": "",
+  "password": "",
   "timeout": 10,
   "bridge": {
     "enabled": false,

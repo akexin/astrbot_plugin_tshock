@@ -83,27 +83,49 @@ AstrBot/
 
 > 修改后**必须重启服务器**才会生效。TShock 在关闭时会把内存中的配置回写到磁盘，因此请先停服再改文件，否则改动会被覆盖。
 
-### 第 2 步：生成 REST Token
+### 第 2 步：让插件拿到 REST Token
 
-REST API 的鉴权是「Token → 用户账号」的映射，因此**必须用一个已存在的 TShock 账号**来换取 Token，且该账号所属用户组需要具备 REST 相关权限。
+TShock 的 REST 鉴权是「Token → 用户名 + 用户组」的映射。以下三种方式**任选其一**。
 
-**方式一：使用内置脚本（推荐）**
+**方式一：在服务端 `config.json` 里预置 Token（免密，推荐自建服）**
+
+在服务端 `config.json` 中加入 `ApplicationRestTokens`，**JSON 的键名就是你的 Token**：
+
+```json
+"ApplicationRestTokens": {
+  "my-astrbot-token": {
+    "Username": "astrbot",
+    "UserGroupName": "owner"
+  }
+}
+```
+
+重启服务器后，把键名 `my-astrbot-token` 原样填入插件的 `token` 配置即可。
+
+> ⚠️ 两个硬性要求（写错必然 403）：
+>
+> 1. `ApplicationRestTokens` 的值**只有 `Username` 与 `UserGroupName` 两个字段，没有 `Password`**（依据源码 `TShockAPI/Rest/SecureRest.cs` 的 `TokenData` 结构）。填 `Password` 不生效，服务端回写配置时也会把它丢弃。
+> 2. `UserGroupName` 必须是服务器上**真实存在的用户组名**，且该组需持有对应的 `tshock.rest.*` 权限。组名拼错时该 Token 每次请求都返回 403。
+
+**方式二：用账号密码换 Token**
 
 ```bash
 python tools/setup_rest_token.py --host http://<主机>:<REST端口>
 ```
 
-脚本会交互式询问管理员用户名与密码（密码不回显、不写入任何文件），随后直接调用 `/v2/token/create` 并验证结果。
+脚本会交互式询问账号密码（不回显、不写入任何文件），随后调用 `/v2/token/create` 并验证结果；把返回的 `token` 填入插件配置。
 
-**方式二：手动调用**
+也可手动调用：
 
 ```bash
-curl "http://<主机>:<REST端口>/v2/token/create?username=<管理员名>&password=<密码>"
+curl "http://<主机>:<REST端口>/v2/token/create?username=<账号>&password=<密码>"
 ```
 
-返回中的 `token` 字段即为所需 Token。
+**方式三：把账号密码直接交给插件**
 
-> 返回 `403 用户名或密码错误，也可能是该用户没有足够的权限。` 有两种原因：账号密码不正确；或该账号所属用户组缺少 REST 授权权限。请改用管理员账号，或在服务端控制台为其提权。
+插件的 `username` / `password` 配置项即为此设计：当 `token` 留空而这两项已填时，插件会在启动时自动调用 `/v2/token/create` 换取 Token（**仅内存缓存，不写入任何文件**）。
+
+> 方式二、三都要求所用账号所属用户组具备 `tshock.rest.useapi` 权限（或组名恰为 `superadmin`）。若返回 `403 用户名或密码错误，也可能是该用户没有足够的权限`，即账号密码有误或该组缺权限。
 
 ### 第 3 步：配置插件
 
@@ -114,7 +136,9 @@ curl "http://<主机>:<REST端口>/v2/token/create?username=<管理员名>&passw
 | 配置项 | 说明 | 默认值 |
 | --- | --- | --- |
 | `host` | TShock REST API 基础地址 | `http://127.0.0.1:7878` |
-| `token` | REST API Token | 空 |
+| `token` | REST API Token（预置 Token 时填该 Token 的键名） | 空 |
+| `username` | TShock 账号用户名；`token` 留空时用于自动换取 Token | 空 |
+| `password` | TShock 账号密码；仅保存在 AstrBot 配置中 | 空 |
 | `timeout` | HTTP 请求超时（秒） | `10` |
 | `bridge.enabled` | 是否启用消息桥接 | `false` |
 | `bridge.target_umo` | 接收服务器推送的会话（UMO） | 空 |
@@ -163,6 +187,15 @@ curl "http://<主机>:<REST端口>/v2/token/create?username=<管理员名>&passw
 5. TShock 6.x 已移除 `/v2/server/rawcmd`、`/v2/server/motd`、`/v2/server/rules` 等旧端点，插件使用 `/v3/server/rawcmd`。
 
 ## 变更日志
+
+### v1.1.4
+
+**新增两种免手工取 Token 的连接方式**
+
+- 新增 `username` / `password` 配置项：`token` 留空时，插件启动阶段自动调用 `/v2/token/create` 换取 Token（仅内存缓存，不落盘）；请求遇到 401/403 时也会自动重新登录并重试一次。
+- 完善对服务端 `ApplicationRestTokens` 预置 Token 方式的说明：明确 `TokenData` **没有 `Password` 字段**，且 `UserGroupName` 必须是真实存在的用户组并持有对应 `tshock.rest.*` 权限。
+- 401/403 错误信息补充排障提示，不再统一提示为「Token 错误」。
+- `/ts status` 增加「鉴权」一行，便于确认 Token 是否已生效。
 
 ### v1.1.3
 

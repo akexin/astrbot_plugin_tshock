@@ -11,7 +11,20 @@
     "default": "",
     "secret": true,
     "obvious_hint": true,
-    "hint": "通过 http://服务器地址:端口/v2/token/create?username=xxx&password=xxx 获取，或运行项目内 tools/setup_rest_token.py 交互生成"
+    "hint": "二选一：① 服务端 config.json 的 ApplicationRestTokens 预置了 Token 时，把该 Token（JSON 的键名）填到这里；② 留空并在下方填写 TShock 账号密码，由插件自动换取 Token"
+  },
+  "username": {
+    "description": "TShock 账号用户名（可选）",
+    "type": "string",
+    "default": "",
+    "hint": "仅当 token 留空时生效：插件会调用 /v2/token/create 自动换取 Token。该账号所在用户组需具备 tshock.rest.useapi 权限"
+  },
+  "password": {
+    "description": "TShock 账号密码（可选）",
+    "type": "string",
+    "default": "",
+    "secret": true,
+    "hint": "仅当 token 留空时生效；仅保存在 AstrBot 配置中，不会写入插件目录"
   },
   "timeout": {
     "description": "HTTP 请求超时（秒）",

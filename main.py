@@ -12,6 +12,19 @@ astrbot_plugin_tshock
 依赖：httpx（异步 HTTP），见 requirements.txt
 参考：https://tshock.readme.io/reference/rest-api-endpoints
 
+v1.1.4 变更
+-----------
+新增两种免手工取 Token 的连接方式：
+  - 新增配置项 ``username`` / ``password``：当 ``token`` 留空时，插件会用账号密码
+    调用 ``/v2/token/create`` 自动换取 REST Token（仅内存缓存，不写入插件目录）。
+  - 若在服务端 config.json 的 ``ApplicationRestTokens`` 中预置了 Token，
+    直接把该 Token（JSON 的键名）填入插件配置的 ``token`` 即可。
+    注意：TShock 的 TokenData 结构只有 ``Username`` 与 ``UserGroupName`` 两个字段，
+    **没有 ``Password``**；且 ``UserGroupName`` 必须是服务器上真实存在的用户组，
+    该组还需持有对应的 ``tshock.rest.*`` 权限，否则鉴权时会返回 403。
+  - 401/403 的错误信息补充排障提示（Token / 用户组 / 权限），避免统一误报为“Token 错误”。
+  - ``/ts status`` 增加鉴权状态一行，便于确认 Token 是否已生效。
+
 v1.1.3 变更
 -----------
 兼容性修复（P0）：
@@ -68,7 +81,7 @@ from astrbot.api.event import AstrMessageEvent, MessageChain, filter
 from astrbot.api.message_components import Plain
 from astrbot.api.star import Context, Star
 
-__version__ = "1.1.3"
+__version__ = "1.1.4"
 
 # TShock 默认每分钟 5 次 REST 请求，低于 12 秒的轮询必然触发限流并误判离线。
 MIN_POLL_INTERVAL = 12
@@ -99,7 +112,14 @@ class TShockClient:
       - ``/v2/server/motd`` / ``/v2/server/rules`` 已在 6.x 移除，返回 404
     """
 
-    def __init__(self, host: str, token: str, timeout: int = 10):
+    def __init__(
+        self,
+        host: str,
+        token: str,
+        timeout: int = 10,
+        username: str = "",
+        password: str = "",
+    ):
         host = (host or "").strip().rstrip("/")
         # 容错：允许用户只填 "域名:端口" 而省略协议头
         if host and not host.startswith(("http://", "https://")):
@@ -107,6 +127,9 @@ class TShockClient:
         self.host = host
         self.token = (token or "").strip()
         self.timeout = timeout
+        # 可选：账号密码。仅在 token 为空时用于自动换取 REST Token。
+        self.username = (username or "").strip()
+        self.password = password or ""
         self._client: httpx.AsyncClient | None = None
 
     async def _client_get(self) -> httpx.AsyncClient:
@@ -114,18 +137,75 @@ class TShockClient:
             self._client = httpx.AsyncClient(timeout=self.timeout)
         return self._client
 
-    async def _get(self, path: str, params: dict | None = None) -> Any:
-        params = dict(params or {})
+    async def ensure_token(self) -> bool:
+        """在未配置 token 时，用账号密码向 ``/v2/token/create`` 换取 REST Token。
+
+        TShock 的 ``/v2/token/create`` 需要账号密码，且该账号所在用户组必须具备
+        ``tshock.rest.useapi`` 权限（或组名恰为 ``superadmin``）。
+        换到的 Token 仅缓存在内存中，不写入配置文件。
+
+        参考：TShockAPI/Rest/SecureRest.cs -> NewTokenInternal
+        """
         if self.token:
-            params["token"] = self.token
+            return True
+        if not (self.username and self.password):
+            return False
+        try:
+            data = await self._get(
+                "/v2/token/create",
+                {"username": self.username, "password": self.password},
+                with_token=False,
+                _retry=False,
+            )
+        except TShockAPIError as exc:
+            logger.error("[tshock] 用账号密码换取 REST Token 失败：%s", exc)
+            return False
+
+        token = ""
+        if isinstance(data, dict):
+            token = str(data.get("token") or "").strip()
+        if not token:
+            logger.error("[tshock] /v2/token/create 未返回 token，响应：%s", data)
+            return False
+
+        self.token = token
+        logger.info("[tshock] 已通过账号 %s 自动获取 REST Token", self.username)
+        return True
+
+    async def _get(
+        self,
+        path: str,
+        params: dict | None = None,
+        *,
+        with_token: bool = True,
+        _retry: bool = True,
+    ) -> Any:
+        base_params = dict(params or {})
+        query = dict(base_params)
+        if with_token and self.token:
+            query["token"] = self.token
 
         client = await self._client_get()
         url = f"{self.host}{path}"
 
         try:
-            resp = await client.get(url, params=params)
+            resp = await client.get(url, params=query)
         except httpx.HTTPError as exc:
             raise TShockAPIError(f"无法连接 TShock 服务器: {exc}") from exc
+
+        # 鉴权失败且配置了账号密码时，自动重新登录并重试一次。
+        if (
+            resp.status_code in (401, 403)
+            and with_token
+            and _retry
+            and self.username
+            and self.password
+        ):
+            self.token = ""
+            if await self.ensure_token():
+                return await self._get(
+                    path, base_params, with_token=True, _retry=False
+                )
 
         if resp.status_code >= 400:
             detail = ""
@@ -145,7 +225,12 @@ class TShockClient:
 
             message = f"TShock 返回错误 (HTTP {resp.status_code})"
             if resp.status_code in (401, 403):
-                message += "，请检查 REST Token 是否正确"
+                message += (
+                    "：鉴权失败。请检查插件配置的 Token；"
+                    "若使用服务端 config.json 中 ApplicationRestTokens 预置的 Token，"
+                    "请确认其 UserGroupName 是服务器上真实存在的用户组，且该组持有对应的 "
+                    "tshock.rest.* 权限（该结构没有 Password 字段，勿填密码）"
+                )
             if detail:
                 message += f": {detail}"
             raise TShockAPIError(message, status_code=resp.status_code)
@@ -196,8 +281,17 @@ class TShockPlugin(Star):
         self.config = config
         self.host = str(config.get("host", "http://127.0.0.1:7878")).strip()
         self.token = str(config.get("token", "")).strip()
+        # 可选：账号密码（token 为空时由插件自动换取 Token）
+        self.username = str(config.get("username", "")).strip()
+        self.password = str(config.get("password", ""))
         self.timeout = int(config.get("timeout", 10) or 10)
-        self.client = TShockClient(self.host, self.token, self.timeout)
+        self.client = TShockClient(
+            self.host,
+            self.token,
+            self.timeout,
+            username=self.username,
+            password=self.password,
+        )
 
         # 桥接相关状态
         self._bridge_task: asyncio.Task | None = None
@@ -217,6 +311,9 @@ class TShockPlugin(Star):
             self.host,
             bool((self.config.get("bridge") or {}).get("enabled")),
         )
+        # 未配置 token 但提供了账号密码时，启动阶段自动换取 Token（失败仅告警，不阻断加载）。
+        if not self.token and self.username and self.password:
+            await self.client.ensure_token()
         self._sync_bridge_task()
 
     async def terminate(self) -> None:
@@ -577,6 +674,7 @@ class TShockPlugin(Star):
         tsv = data.get("tshockversion", "?")
         ter = data.get("serverversion", "?")
         uptime = data.get("uptime", "?")
+        auth = "已配置 Token" if self.client.token else "未配置 Token（仅公开端点可用）"
         return (
             "🌀 TShock 服务器状态\n"
             f"名称：{name}\n"
@@ -585,6 +683,7 @@ class TShockPlugin(Star):
             f"游戏端口：{port}\n"
             f"版本：TShock {tsv} / Terraria {ter}\n"
             f"运行时长：{uptime}\n"
+            f"鉴权：{auth}\n"
             f"REST：{self.host}"
         )
 
