@@ -12,6 +12,15 @@ astrbot_plugin_tshock
 依赖：httpx（异步 HTTP），见 requirements.txt
 参考：https://tshock.readme.io/reference/rest-api-endpoints
 
+v1.1.5 变更
+-----------
+按「指令按用途分组」重做菜单与回执：
+  - 新增配置项 ``message_type``：``text``（默认，纯文本）或 ``image``
+    （把指令回执渲染成图片发送）。渲染失败时自动回退为文本，不会丢回复。
+  - 指令组与子指令增加中文别名（如 ``/ts 状态``、``/ts 在线``、``/ts 广播``），
+    菜单按「查询 / 管理 / 桥接」分组重排。
+  - ``/ts status`` 精简输出：去掉「鉴权」与「REST」两行，仅保留服务器自身信息。
+
 v1.1.4 变更
 -----------
 新增两种免手工取 Token 的连接方式：
@@ -72,6 +81,10 @@ v1.1.0 变更
 """
 
 import asyncio
+import hashlib
+import os
+import re
+import tempfile
 from typing import Any
 
 import httpx
@@ -81,12 +94,133 @@ from astrbot.api.event import AstrMessageEvent, MessageChain, filter
 from astrbot.api.message_components import Plain
 from astrbot.api.star import Context, Star
 
-__version__ = "1.1.4"
+__version__ = "1.1.5"
 
 # TShock 默认每分钟 5 次 REST 请求，低于 12 秒的轮询必然触发限流并误判离线。
 MIN_POLL_INTERVAL = 12
 # TShock 默认 MaximumChatMessageLength，超长消息先截断再发送。
 MAX_FORWARD_LENGTH = 500
+
+# message_type 的取值
+MESSAGE_TYPE_TEXT = "text"
+MESSAGE_TYPE_IMAGE = "image"
+# 图片渲染参数（像素）
+IMAGE_WIDTH = 760
+IMAGE_PADDING = 28
+IMAGE_FONT_SIZE = 24
+IMAGE_TITLE_SIZE = 30
+IMAGE_LINE_GAP = 12
+
+# 中文/等宽字体候选路径（按优先级），跨平台兜底。
+# 中文字体通常不含 emoji 字形，渲染图片时需先剥离，否则会显示成方块。
+# 文本回执不受影响，仍会保留 emoji。
+_EMOJI_RE = re.compile(
+    "["
+    "\U0001f000-\U0001faff"  # 各类 emoji / 符号
+    "\U00002600-\U000027bf"  # 杂项符号与装饰符号（✅❌⛔ 等）
+    "\U00002190-\U000021ff"  # 箭头
+    "\U0000fe0f"             # 变体选择符
+    "\U0000200d"             # 零宽连接符
+    "]+"
+)
+
+FONT_CANDIDATES = (
+    "C:/Windows/Fonts/msyh.ttc",
+    "C:/Windows/Fonts/simhei.ttf",
+    "C:/Windows/Fonts/simsun.ttc",
+    "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+    "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
+    "/System/Library/Fonts/PingFang.ttc",
+    "/System/Library/Fonts/STHeiti Medium.ttc",
+)
+
+
+def _pick_font(size: int):
+    """加载一个可用的字体，全部不可用时返回 None（调用方回退为文本）。"""
+    from PIL import ImageFont
+
+    for path in FONT_CANDIDATES:
+        if os.path.exists(path):
+            try:
+                return ImageFont.truetype(path, size)
+            except Exception:  # noqa: BLE001
+                continue
+    return None
+
+
+def render_text_image(text: str) -> str | None:
+    """把纯文本渲染为一张 PNG，返回本地文件路径；失败返回 None。
+
+    设计目标：不依赖任何外部服务，离线可用；渲染失败由调用方回退为文本，
+    因此这里所有异常都被吞掉并返回 None。
+    """
+    try:
+        from PIL import Image, ImageDraw
+    except Exception:  # noqa: BLE001  Pillow 未安装
+        logger.warning("[tshock] 未安装 Pillow，无法渲染图片，已回退为文本")
+        return None
+
+    lines = (text or "").splitlines() or [""]
+    # 剥离 emoji（中文字体无对应字形会渲染成方块），并清掉剥离后残留的行首空白
+    cleaned: list[str] = []
+    for line in lines:
+        m = _EMOJI_RE.match(line)
+        if m:
+            line = line[m.end():].lstrip()
+        else:
+            line = _EMOJI_RE.sub("", line)
+        cleaned.append(line.rstrip())
+    lines = cleaned
+
+    body_font = _pick_font(IMAGE_FONT_SIZE)
+    title_font = _pick_font(IMAGE_TITLE_SIZE)
+    if body_font is None:
+        logger.warning("[tshock] 未找到可用字体，无法渲染图片，已回退为文本")
+        return None
+
+    # 先按可用宽度做一次折行（按字符宽度估算，CJK 计为等宽）
+    max_width = IMAGE_WIDTH - IMAGE_PADDING * 2
+    wrapped: list[str] = []
+    for line in lines:
+        if not line:
+            wrapped.append("")
+            continue
+        cur = ""
+        for ch in line:
+            if body_font.getlength(cur + ch) > max_width:
+                wrapped.append(cur)
+                cur = ch
+            else:
+                cur += ch
+        wrapped.append(cur)
+
+    line_h = IMAGE_FONT_SIZE + IMAGE_LINE_GAP
+    height = IMAGE_PADDING * 2 + line_h * len(wrapped)
+    img = Image.new("RGB", (IMAGE_WIDTH, max(height, 120)), (255, 255, 255))
+    draw = ImageDraw.Draw(img)
+
+    # 顶部标题色条
+    accent = (32, 122, 224)
+    draw.rectangle([0, 0, IMAGE_WIDTH, 6], fill=accent)
+
+    y = IMAGE_PADDING
+    for line in wrapped:
+        font = title_font or body_font
+        color = (24, 28, 36)
+        # 形如 "【查询】" 的行做标题样式
+        if line.startswith("【") and line.endswith("】"):
+            color = accent
+            font = title_font or body_font
+        draw.text((IMAGE_PADDING, y), line, font=font, fill=color)
+        y += line_h
+
+    out_dir = os.path.join(tempfile.gettempdir(), "astrbot_plugin_tshock")
+    os.makedirs(out_dir, exist_ok=True)
+    name = hashlib.md5((text or "").encode("utf-8")).hexdigest()[:16] + ".png"
+    path = os.path.join(out_dir, name)
+    img.save(path, "PNG")
+    return path
 
 
 class TShockAPIError(Exception):
@@ -285,6 +419,10 @@ class TShockPlugin(Star):
         self.username = str(config.get("username", "")).strip()
         self.password = str(config.get("password", ""))
         self.timeout = int(config.get("timeout", 10) or 10)
+        # 回执形式：text（默认）或 image（渲染成图片发送）
+        self.message_type = str(config.get("message_type", MESSAGE_TYPE_TEXT)).strip().lower()
+        if self.message_type not in (MESSAGE_TYPE_TEXT, MESSAGE_TYPE_IMAGE):
+            self.message_type = MESSAGE_TYPE_TEXT
         self.client = TShockClient(
             self.host,
             self.token,
@@ -356,9 +494,27 @@ class TShockPlugin(Star):
             return None
         return "⛔ 该指令仅限管理员使用。"
 
+    # ==================== 回执（文本 / 图片） ====================
+
+    def _result(self, event: AstrMessageEvent, text: str):
+        """按 ``message_type`` 生成指令回执。
+
+        - ``text`` ：普通文本结果。
+        - ``image``：把文本渲染成 PNG 后作为图片发送；渲染失败（缺 Pillow、
+          缺字体等）会**自动回退为文本**，保证任何情况下都有回复。
+        """
+        if self.message_type == MESSAGE_TYPE_IMAGE:
+            path = render_text_image(text)
+            if path:
+                try:
+                    return event.image_result(path)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("[tshock] 发送图片失败，回退为文本：%s", exc)
+        return event.plain_result(text)
+
     # ==================== 指令组 ====================
 
-    @filter.command_group("ts")
+    @filter.command_group("ts", alias={"TSHOCK"})
     def ts():
         """TShock 服务器管理指令组（指令组的函数体不需要实现任何逻辑）。
 
@@ -366,33 +522,21 @@ class TShockPlugin(Star):
         对象，因此按官方文档写法不声明 ``self``。
         """
 
-    @ts.command("help")
+    @ts.command("help", alias={"帮助", "菜单", "h"})
     async def ts_help(self, event: AstrMessageEvent):
-        """显示帮助信息"""
-        help_text = (
-            "🌀 TShock 服务器管理指令：\n"
-            "/ts status           查询服务器状态\n"
-            "/ts players          查询在线玩家\n"
-            "/ts help             显示本帮助\n"
-            "—— 以下需管理员权限 ——\n"
-            "/ts here             将当前会话设为桥接目标\n"
-            "/ts users            查询用户账号列表\n"
-            "/ts broadcast <消息>  向服务器广播消息\n"
-            "/ts say <玩家> <消息> 向指定玩家私聊\n"
-            "/ts cmd <指令>        执行服务器原始命令"
-        )
-        yield event.plain_result(help_text)
+        """显示指令菜单"""
+        yield self._result(event, self._help_text())
 
-    @ts.command("status")
+    @ts.command("status", alias={"状态", "信息"})
     async def ts_status(self, event: AstrMessageEvent):
         """查询服务器状态"""
         try:
             data = await self.client.status(players=False)
-            yield event.plain_result(self._format_status(data))
+            yield self._result(event, self._format_status(data))
         except TShockAPIError as exc:
-            yield event.plain_result(f"❌ {exc}")
+            yield self._result(event, f"❌ {exc}")
 
-    @ts.command("players")
+    @ts.command("players", alias={"在线", "玩家"})
     async def ts_players(self, event: AstrMessageEvent):
         """查询在线玩家列表"""
         try:
@@ -402,22 +546,23 @@ class TShockPlugin(Star):
             total = len(names)
             maxp = data.get("maxplayers", "?") if isinstance(data, dict) else "?"
             if not names:
-                yield event.plain_result("🏝️ 当前没有玩家在线。")
+                yield self._result(event, "🏝️ 当前没有玩家在线。")
                 return
-            yield event.plain_result(
+            yield self._result(
+                event,
                 f"👥 在线玩家（{total}/{maxp}）：\n"
-                + "\n".join(f"· {n}" for n in names)
+                + "\n".join(f"· {n}" for n in names),
             )
         except TShockAPIError as exc:
-            yield event.plain_result(f"❌ {exc}")
+            yield self._result(event, f"❌ {exc}")
 
-    @ts.command("here")
+    @ts.command("here", alias={"这里"})
     @filter.permission_type(filter.PermissionType.ADMIN)
     async def ts_here(self, event: AstrMessageEvent):
         """将当前会话设为桥接目标会话（管理员）"""
         deny = self._deny_if_not_admin(event)
         if deny:
-            yield event.plain_result(deny)
+            yield self._result(event, deny)
             return
 
         umo = event.unified_msg_origin
@@ -432,24 +577,25 @@ class TShockPlugin(Star):
         self._last_players = None
         self._was_online = None
 
-        yield event.plain_result(
+        yield self._result(
+            event,
             f"✅ 已将当前会话设为桥接目标：\n{umo}\n"
-            "服务器/玩家上下线通知将推送到此会话。"
+            "服务器/玩家上下线通知将推送到此会话。",
         )
 
-    @ts.command("users")
+    @ts.command("users", alias={"账号", "用户"})
     @filter.permission_type(filter.PermissionType.ADMIN)
     async def ts_users(self, event: AstrMessageEvent):
         """查询用户账号列表（管理员）"""
         deny = self._deny_if_not_admin(event)
         if deny:
-            yield event.plain_result(deny)
+            yield self._result(event, deny)
             return
         try:
             data = await self.client.users_list()
             users = data.get("users") if isinstance(data, dict) else None
             if not users:
-                yield event.plain_result("没有查询到用户账号。")
+                yield self._result(event, "没有查询到用户账号。")
                 return
             lines = []
             for u in users:
@@ -459,70 +605,71 @@ class TShockPlugin(Star):
                     )
                 else:
                     lines.append(f"· {u}")
-            yield event.plain_result("🗂️ 用户账号列表：\n" + "\n".join(lines))
+            yield self._result(event, "🗂️ 用户账号列表：\n" + "\n".join(lines))
         except TShockAPIError as exc:
-            yield event.plain_result(f"❌ {exc}")
+            yield self._result(event, f"❌ {exc}")
 
-    @ts.command("broadcast")
+    @ts.command("broadcast", alias={"广播"})
     @filter.permission_type(filter.PermissionType.ADMIN)
     async def ts_broadcast(self, event: AstrMessageEvent):
         """向服务器广播消息（管理员）"""
         deny = self._deny_if_not_admin(event)
         if deny:
-            yield event.plain_result(deny)
+            yield self._result(event, deny)
             return
-        msg = self._text_after(event, "broadcast")
+        msg = self._text_after(event, ("broadcast", "广播"))
         if not msg:
-            yield event.plain_result("用法：/ts broadcast <消息>")
+            yield self._result(event, "用法：/ts broadcast <消息>")
             return
         msg = self._truncate(msg)
         try:
             await self.client.broadcast(msg)
-            yield event.plain_result(f"📢 已广播：{msg}")
+            yield self._result(event, f"📢 已广播：{msg}")
         except TShockAPIError as exc:
-            yield event.plain_result(f"❌ {exc}")
+            yield self._result(event, f"❌ {exc}")
 
-    @ts.command("say")
+    @ts.command("say", alias={"私聊"})
     @filter.permission_type(filter.PermissionType.ADMIN)
     async def ts_say(self, event: AstrMessageEvent):
         """向指定玩家私聊（管理员）"""
         deny = self._deny_if_not_admin(event)
         if deny:
-            yield event.plain_result(deny)
+            yield self._result(event, deny)
             return
-        text = self._text_after(event, "say")
+        text = self._text_after(event, ("say", "私聊"))
         parts = text.split(None, 1)
         if len(parts) < 2:
-            yield event.plain_result("用法：/ts say <玩家名> <消息>")
+            yield self._result(event, "用法：/ts say <玩家名> <消息>")
             return
         player, msg = parts[0], self._truncate(parts[1])
         try:
             # 注意：不要给参数加引号。TShock 的命令解析器按空格切分参数且不剥离引号，
             # 加了引号会把玩家名变成 '"星"' 从而匹配不到玩家。
             await self.client.rawcmd(f"whisper {player} {msg}")
-            yield event.plain_result(f"💬 已私聊 {player}：{msg}")
+            yield self._result(event, f"💬 已私聊 {player}：{msg}")
         except TShockAPIError as exc:
-            yield event.plain_result(f"❌ {exc}")
+            yield self._result(event, f"❌ {exc}")
 
-    @ts.command("cmd")
+    @ts.command("cmd", alias={"执行", "命令"})
     @filter.permission_type(filter.PermissionType.ADMIN)
     async def ts_cmd(self, event: AstrMessageEvent):
         """执行服务器原始命令（管理员）"""
         deny = self._deny_if_not_admin(event)
         if deny:
-            yield event.plain_result(deny)
+            yield self._result(event, deny)
             return
-        cmd = self._text_after(event, "cmd")
+        cmd = self._text_after(event, ("cmd", "执行", "命令"))
         if not cmd:
-            yield event.plain_result("用法：/ts cmd <服务器指令>")
+            yield self._result(event, "用法：/ts cmd <服务器指令>")
             return
         try:
             result = await self.client.rawcmd(cmd)
-            yield event.plain_result(
-                "🖥️ 命令执行结果：\n" + self._format_command_result(result)
+            yield self._result(
+                event,
+                "🖥️ 命令执行结果：\n" + self._format_command_result(result),
             )
         except TShockAPIError as exc:
-            yield event.plain_result(f"❌ {exc}")
+            yield self._result(event, f"❌ {exc}")
 
     # ==================== 消息监听（机器人 -> 服务器 转发） ====================
 
@@ -659,11 +806,7 @@ class TShockPlugin(Star):
         return names
 
     def _format_status(self, data: Any) -> str:
-        """格式化服务器状态信息。
-
-        注意：status 返回的 ``port`` 是**游戏端口**，与 REST 端口不同，
-        不能与 ``self.host`` 直接拼接。
-        """
+        """格式化服务器状态信息（只输出服务器自身信息）。"""
         if not isinstance(data, dict):
             return f"服务器返回：\n{data}"
         name = data.get("name") or "未设置"
@@ -674,7 +817,6 @@ class TShockPlugin(Star):
         tsv = data.get("tshockversion", "?")
         ter = data.get("serverversion", "?")
         uptime = data.get("uptime", "?")
-        auth = "已配置 Token" if self.client.token else "未配置 Token（仅公开端点可用）"
         return (
             "🌀 TShock 服务器状态\n"
             f"名称：{name}\n"
@@ -682,9 +824,34 @@ class TShockPlugin(Star):
             f"玩家：{pc}/{mp}\n"
             f"游戏端口：{port}\n"
             f"版本：TShock {tsv} / Terraria {ter}\n"
-            f"运行时长：{uptime}\n"
-            f"鉴权：{auth}\n"
-            f"REST：{self.host}"
+            f"运行时长：{uptime}"
+        )
+
+    # ==================== 菜单 ====================
+
+    @staticmethod
+    def _help_text() -> str:
+        """按用途分组的指令菜单。
+
+        以 ``【】`` 包裹的行会被图片渲染器识别为小标题。
+        """
+        return (
+            "🌀 TShock 服务器管理\n"
+            "\n"
+            "【查询】所有人可用\n"
+            "  /ts status   | /ts 状态     服务器状态\n"
+            "  /ts players  | /ts 在线     在线玩家\n"
+            "  /ts help     | /ts 菜单     显示本菜单\n"
+            "\n"
+            "【管理】仅管理员\n"
+            "  /ts users      | /ts 账号     用户账号列表\n"
+            "  /ts broadcast  | /ts 广播     向服务器广播消息\n"
+            "  /ts say        | /ts 私聊     向指定玩家私聊\n"
+            "  /ts cmd        | /ts 执行     执行服务器原始命令\n"
+            "\n"
+            "【桥接】聊天室与游戏服务器互通\n"
+            "  /ts here  | /ts 这里   把当前会话设为桥接目标\n"
+            "  启用后服务器与玩家上下线会推送到该会话"
         )
 
     @staticmethod
@@ -702,10 +869,17 @@ class TShockPlugin(Star):
         return text or "(无输出)"
 
     @staticmethod
-    def _text_after(event: AstrMessageEvent, subcommand: str) -> str:
-        """从原始消息中提取指定子命令之后的文本（自动兼容前缀与参数空格）。"""
+    def _text_after(event: AstrMessageEvent, subcommands: str | tuple | set) -> str:
+        """从原始消息中提取子命令之后的文本。
+
+        ``subcommands`` 可以是单个名称或名称集合（含别名），命中任意一个即可。
+        """
+        if isinstance(subcommands, str):
+            accepted = {subcommands}
+        else:
+            accepted = set(subcommands)
         parts = (event.message_str or "").strip().split()
         for i, token in enumerate(parts):
-            if token == subcommand:
+            if token in accepted:
                 return " ".join(parts[i + 1 :])
         return ""

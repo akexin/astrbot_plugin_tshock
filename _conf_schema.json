@@ -32,6 +32,13 @@
     "default": 10,
     "slider": { "min": 1, "max": 60, "step": 1 }
   },
+  "message_type": {
+    "description": "指令回执形式",
+    "type": "string",
+    "default": "text",
+    "options": ["text", "image"],
+    "hint": "text = 纯文本；image = 把回执渲染成图片发送（需 Pillow，缺字体或渲染失败时自动回退为文本）"
+  },
   "bridge": {
     "description": "双向桥接配置",
     "type": "object",

@@ -140,6 +140,7 @@ curl "http://<主机>:<REST端口>/v2/token/create?username=<账号>&password=<�
 | `username` | TShock 账号用户名；`token` 留空时用于自动换取 Token | 空 |
 | `password` | TShock 账号密码；仅保存在 AstrBot 配置中 | 空 |
 | `timeout` | HTTP 请求超时（秒） | `10` |
+| `message_type` | 指令回执形式：`text` 纯文本 / `image` 图片 | `text` |
 | `bridge.enabled` | 是否启用消息桥接 | `false` |
 | `bridge.target_umo` | 接收服务器推送的会话（UMO） | 空 |
 | `bridge.poll_interval` | 轮询服务器状态间隔（秒，下限 12） | `15` |
@@ -151,18 +152,39 @@ curl "http://<主机>:<REST端口>/v2/token/create?username=<账号>&password=<�
 
 ## 指令
 
-| 指令 | 功能 | 权限 |
+指令组为 `/ts`（别名 `/TSHOCK`），每个子指令都有中文别名，可任选一种写法。
+
+### 查询（所有人）
+
+| 指令 | 中文别名 | 功能 |
 | --- | --- | --- |
-| `/ts status` | 查询服务器状态 | 所有人 |
-| `/ts players` | 查询在线玩家 | 所有人 |
-| `/ts help` | 显示帮助 | 所有人 |
-| `/ts here` | 把当前会话设为桥接目标 | 管理员 |
-| `/ts users` | 查询用户账号列表 | 管理员 |
-| `/ts broadcast <消息>` | 向服务器广播 | 管理员 |
-| `/ts say <玩家> <消息>` | 私聊指定玩家 | 管理员 |
-| `/ts cmd <指令>` | 执行服务器原始命令 | 管理员 |
+| `/ts status` | `/ts 状态`、`/ts 信息` | 查询服务器状态 |
+| `/ts players` | `/ts 在线`、`/ts 玩家` | 查询在线玩家 |
+| `/ts help` | `/ts 菜单`、`/ts 帮助`、`/ts h` | 显示指令菜单 |
+
+### 管理（仅管理员）
+
+| 指令 | 中文别名 | 功能 |
+| --- | --- | --- |
+| `/ts users` | `/ts 账号`、`/ts 用户` | 查询用户账号列表 |
+| `/ts broadcast <消息>` | `/ts 广播 <消息>` | 向服务器广播 |
+| `/ts say <玩家> <消息>` | `/ts 私聊 <玩家> <消息>` | 私聊指定玩家 |
+| `/ts cmd <指令>` | `/ts 执行 <指令>`、`/ts 命令 <指令>` | 执行服务器原始命令 |
+
+### 桥接
+
+| 指令 | 中文别名 | 功能 |
+| --- | --- | --- |
+| `/ts here` | `/ts 这里` | 把当前会话设为桥接目标 |
 
 管理员指令除了装饰器声明外，还在函数体内做了独立校验，以规避不同 AstrBot 版本对装饰器顺序处理的差异。
+
+### 回执形式（文本 / 图片）
+
+配置项 `message_type` 控制所有指令回执的呈现方式：
+
+- `text`（默认）：直接回复纯文本。
+- `image`：把回执渲染成图片发送。渲染依赖 `Pillow`（已列入 `requirements.txt`，AstrBot 会自动安装）与一个中文字体；插件内置跨平台字体候选列表（Windows `msyh.ttc`/`simhei.ttf`、Linux Noto CJK/文泉驿、macOS PingFang）。**任一环节失败都会自动回退为文本**，不会出现"没有回复"的情况。
 
 ## 桥接配置速成
 
@@ -187,6 +209,15 @@ curl "http://<主机>:<REST端口>/v2/token/create?username=<账号>&password=<�
 5. TShock 6.x 已移除 `/v2/server/rawcmd`、`/v2/server/motd`、`/v2/server/rules` 等旧端点，插件使用 `/v3/server/rawcmd`。
 
 ## 变更日志
+
+### v1.1.5
+
+**菜单重排 + 回执可选文本/图片**
+
+- 新增 `message_type` 配置项：`text`（默认）/ `image`（把指令回执渲染成图片）。渲染失败自动回退为文本。
+- 指令组别名 `/TSHOCK`；所有子指令增加中文别名（`/ts 状态`、`/ts 在线`、`/ts 广播`、`/ts 私聊`、`/ts 执行` 等）。
+- 菜单按「查询 / 管理 / 桥接」三组重排。
+- `/ts status` 精简：去掉「鉴权」与「REST」两行，只保留服务器自身信息。
 
 ### v1.1.4
 

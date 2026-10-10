@@ -4,6 +4,7 @@
   "username": "",
   "password": "",
   "timeout": 10,
+  "message_type": "text",
   "bridge": {
     "enabled": false,
     "target_umo": "",
