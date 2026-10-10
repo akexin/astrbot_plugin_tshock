@@ -1,0 +1,34 @@
+# AstrBot 插件元数据，字段遵循官方插件开发指南 plugin-new.md
+# 插件唯一识别名，以 astrbot_plugin_ 前缀开头
+name: astrbot_plugin_tshock
+# 展示名（需 AstrBot >= v4.5.0，低版本不会报错）
+display_name: TShock 服务器管理
+# 插件市场卡片短描述（需 AstrBot >= v4.5.0，缺省时回退显示 desc）
+short_desc: 通过 TShock REST API 在聊天里管理 Terraria 服务器
+# 完整描述
+desc: >-
+  通过 TShock REST API 管理 Terraria 服务器。支持查询服务器状态与在线玩家、
+  执行远程命令（广播 / 私聊 / 原始指令），以及聊天室与游戏服务器之间的消息桥接。
+  兼容 TShock 6.x（已在 TShock 6.2.1.0 / Terraria 1.4.5.8 实测）。
+# 版本号，官方推荐带 v 前缀
+version: v1.1.1
+author: akexin
+repo: https://github.com/akexin/astrbot_plugin_tshock
+license: MIT
+# 依赖的 AstrBot 版本范围（PEP 440 写法，不加 v 前缀）；不满足时会被阻止加载
+astrbot_version: ">=4.0.0"
+# 声明支持的平台适配器（使用 ADAPTER_NAME_2_TYPE 的 key）
+# 桥接推送属于主动消息，故仅列出官方文档确认支持主动消息 / 常见的适配器
+support_platforms:
+  - aiocqhttp
+  - telegram
+  - lark
+  - wecom
+  - discord
+  - slack
+  - kook
+tags:
+  - tshock
+  - terraria
+  - game
+  - 游戏服务器

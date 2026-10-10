@@ -1,0 +1,13 @@
+{
+  "host": "http://127.0.0.1:7878",
+  "token": "「在此填入 REST Token，可用 tools/setup_rest_token.py 生成」",
+  "timeout": 10,
+  "bridge": {
+    "enabled": false,
+    "target_umo": "",
+    "poll_interval": 15,
+    "forward_to_server": false,
+    "forward_require_admin": true,
+    "notify_join_leave": true
+  }
+}

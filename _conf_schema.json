@@ -1,0 +1,62 @@
+{
+  "host": {
+    "description": "TShock REST API 基础地址（不含具体端点）",
+    "type": "string",
+    "default": "http://127.0.0.1:7878",
+    "hint": "例如 http://127.0.0.1:7878，跨网络时填 http://<主机或域名>:<REST端口>。需先在 TShock 的 config.json 中开启 RestApiEnabled 并设置 RestApiPort"
+  },
+  "token": {
+    "description": "REST API Token",
+    "type": "string",
+    "default": "",
+    "secret": true,
+    "obvious_hint": true,
+    "hint": "通过 http://服务器地址:端口/v2/token/create?username=xxx&password=xxx 获取，或运行项目内 tools/setup_rest_token.py 交互生成"
+  },
+  "timeout": {
+    "description": "HTTP 请求超时（秒）",
+    "type": "int",
+    "default": 10,
+    "slider": { "min": 1, "max": 60, "step": 1 }
+  },
+  "bridge": {
+    "description": "双向桥接配置",
+    "type": "object",
+    "items": {
+      "enabled": {
+        "description": "是否启用双向桥接",
+        "type": "bool",
+        "default": false
+      },
+      "target_umo": {
+        "description": "接收服务器推送消息的会话（UMO）",
+        "type": "string",
+        "default": "",
+        "hint": "格式 platform:type:session_id，例如 aiocqhttp:GroupMessage:123456789。也可在目标会话内发送 /ts here 自动填入（需管理员）"
+      },
+      "poll_interval": {
+        "description": "轮询服务器状态的间隔（秒）",
+        "type": "int",
+        "default": 15,
+        "slider": { "min": 12, "max": 120, "step": 1 },
+        "hint": "TShock 默认限制每个 Token 每分钟 5 次 REST 请求（RESTMaximumRequestsPerInterval），低于 12 秒会被限流并导致误判离线"
+      },
+      "forward_to_server": {
+        "description": "将目标会话的普通消息转发到游戏服务器（作为广播）",
+        "type": "bool",
+        "default": false
+      },
+      "forward_require_admin": {
+        "description": "转发消息到服务器时要求发送者为管理员",
+        "type": "bool",
+        "default": true,
+        "hint": "关闭后该会话内任何成员的消息都会被广播到游戏内，请谨慎设置"
+      },
+      "notify_join_leave": {
+        "description": "玩家上线/下线时通知机器人",
+        "type": "bool",
+        "default": true
+      }
+    }
+  }
+}
