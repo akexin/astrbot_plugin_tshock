@@ -12,6 +12,16 @@ astrbot_plugin_tshock
 依赖：httpx（异步 HTTP），见 requirements.txt
 参考：https://tshock.readme.io/reference/rest-api-endpoints
 
+v1.1.2 变更
+-----------
+兼容性修复（P0）：
+  - ``self.logger`` 属性由较新版本 AstrBot 的 ``Star`` 基类在 ``__init__`` 中注入，
+    在 AstrBot v4.17 等版本上并不存在，直接使用会抛 ``AttributeError`` 导致插件
+    加载失败。现于 ``__init__`` 中做 ``hasattr`` 探测，缺失时回退到模块级
+    ``astrbot.api.logger``（新版本仍会保留插件专属 logger）。
+  - 主动消息改为 ``MessageChain(chain=[Plain(text)])`` 构造式，该写法在
+    AstrBot v4.17 上已验证可用（``MessageChain().message()`` 为较新 API）。
+
 v1.1.1 变更
 -----------
 对齐 AstrBot 官方插件开发文档：
@@ -49,11 +59,12 @@ from typing import Any
 
 import httpx
 
-from astrbot.api import AstrBotConfig
+from astrbot.api import AstrBotConfig, logger
 from astrbot.api.event import AstrMessageEvent, MessageChain, filter
+from astrbot.api.message_components import Plain
 from astrbot.api.star import Context, Star
 
-__version__ = "1.1.1"
+__version__ = "1.1.2"
 
 # TShock 默认每分钟 5 次 REST 请求，低于 12 秒的轮询必然触发限流并误判离线。
 MIN_POLL_INTERVAL = 12
@@ -174,6 +185,12 @@ class TShockClient:
 class TShockPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
+        # 兼容性：``self.logger``（插件专属日志器）由较新版本 AstrBot 的 Star 基类
+        # 在 __init__ 中注入；部分版本（如 v4.17）的基类没有该属性，若直接使用
+        # 会抛 AttributeError 并导致插件加载失败。这里做一次探测回退。
+        if not hasattr(self, "logger"):
+            self.logger = logger
+
         self.config = config
         self.host = str(config.get("host", "http://127.0.0.1:7878")).strip()
         self.token = str(config.get("token", "")).strip()
@@ -504,11 +521,12 @@ class TShockPlugin(Star):
     async def _notify(self, target: str, text: str) -> None:
         """向桥接目标会话主动发送一条文本消息。
 
-        使用官方文档推荐的 ``MessageChain().message()`` 构建链式消息。
+        使用 ``MessageChain(chain=[Plain(text)])`` 构造消息链，该构造式在
+        AstrBot v4.17 与更新版本上均可用。
         参考：docs/dev/star/guides/send-message —— 主动消息。
         """
         try:
-            chain = MessageChain().message(text)
+            chain = MessageChain(chain=[Plain(text)])
             await self.context.send_message(target, chain)
         except Exception as exc:  # noqa: BLE001
             self.logger.error("[tshock] 推送桥接消息失败: %s", exc)

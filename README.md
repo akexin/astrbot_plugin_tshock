@@ -37,7 +37,7 @@
 | 管理员指令用 `@filter.permission_type(PermissionType.ADMIN)` | ✅ 同时做函数体内显式校验兜底 |
 | 主动消息用 `self.context.send_message(umo, MessageChain().message(...))` | ✅ 桥接推送 |
 | 使用异步 HTTP 库（禁止 `requests`） | ✅ 使用 `httpx.AsyncClient` |
-| 日志使用插件自带的 `self.logger` | ✅ 可在 WebUI 单独设置本插件的日志等级 |
+| 日志使用插件自带的 `self.logger` | ✅ 优先用 `self.logger`，旧版本无该属性时自动回退到模块级 `logger` |
 | 持久化数据不放插件自身目录 | ✅ 配置存于 AstrBot 的 `data/config/`（由 `AstrBotConfig` 管理） |
 | 声明 `metadata.yaml` 元数据字段 | ✅ 含 `display_name` / `short_desc` / `astrbot_version` / `support_platforms` |
 
@@ -156,6 +156,13 @@ curl "http://<主机>:<REST端口>/v2/token/create?username=<管理员名>&passw
 5. TShock 6.x 已移除 `/v2/server/rawcmd`、`/v2/server/motd`、`/v2/server/rules` 等旧端点，插件使用 `/v3/server/rawcmd`。
 
 ## 变更日志
+
+### v1.1.2
+
+**兼容性修复（P0，修复插件无法加载）**
+
+- `self.logger` 属性由较新版本 AstrBot 的 `Star` 基类在 `__init__` 中注入，**在 AstrBot v4.17 等版本上并不存在**，直接使用会抛 `AttributeError: 'TShockPlugin' object has no attribute 'logger'` 导致插件加载失败。现于 `__init__` 中做 `hasattr` 探测，缺失时回退到模块级 `astrbot.api.logger`；较新版本仍保留插件专属 logger。
+- 主动消息由 `MessageChain().message()` 改为 `MessageChain(chain=[Plain(text)])` 构造式——后者在 AstrBot v4.17 上已验证可用，前者为较新 API。
 
 ### v1.1.1
 
